@@ -1,0 +1,246 @@
+=begin pod
+
+=head1 MCP::Server::Tool::Ask
+
+An ask-the-user tool for L<MCP::Server|https://github.com/m-doughty/MCP-Server>,
+built on genuine server-side elicitation.
+
+Every other tool a model can call is something it does I<to> the world. This
+is the one that goes the other way: the model has run out of information, and
+the person who asked for the work is the only one who has it. The pack
+registers a single tool — C<ask> — which renders a form, blocks until the user
+fills it in, and hands the answers back to the model as JSON.
+
+Underneath it is the 2026-07-28 multi round-trip request pattern: the tool call
+is answered with C<resultType: "input_required">, the client shows the user a
+form, and the call resumes exactly where it stopped. Nothing is polled, nothing
+is faked client-side, and the handler is never re-run.
+
+=head2 Synopsis
+
+Plug it into a server you are building by hand:
+
+=begin code :lang<raku>
+use MCP::Server;
+use MCP::Server::Tool::Ask;
+
+my $server = MCP::Server.new(:name<assistant>, :version<1.0>);
+
+$server.plug: MCP::Server::Tool::Ask.new;   # registers user_ask
+
+$server.run;   # stdin/stdout
+=end code
+
+Or name it in a one-shot server, with no C<use> statement at all — the toolkit
+is loaded at runtime:
+
+=begin code :lang<raku>
+use MCP::Server;
+
+MCP::Server.new(
+    :name<assistant>,
+    :tools['Ask' => { timeout => 120 }],
+).run;
+=end code
+
+Or hand C<raku-mcp> a config file:
+
+=begin code :lang<json>
+{
+  "name": "assistant",
+  "version": "1.0",
+  "instructions": "Ask before guessing.",
+  "tools": {
+    "Ask": { "timeout": 120 },
+    "FileSystem": { "root": "/srv/notes" }
+  }
+}
+=end code
+
+=begin code :lang<shell>
+raku-mcp --config=assistant.json
+
+# Or without a file:
+raku-mcp --tool='Ask={"timeout":120}'
+=end code
+
+=head2 Configuration
+
+=begin table
+Key     | Type | Default | Meaning
+======= | ==== | ======= | =======
+timeout | Real | unset   | Seconds to wait for one answer before treating it as a cancellation. Unset means the wait is bounded only by the server's own C<elicitation-ttl> (five minutes by default). Zero or negative dies.
+=end table
+
+C<prefix> is reserved by the framework rather than the pack: pass it to
+C<.plug> as C<< :prefix<...> >>, or put it beside the toolkit's settings in a
+C<:tools> entry or config file. Without one, the pack's default prefix C<user>
+applies, so the tool is C<user_ask>; an explicit empty prefix registers it
+bare.
+
+=head2 What the client has to support
+
+The tool needs somebody to ask. That means one of:
+
+=item A B<2026-07-28 client that declared the elicitation capability>
+(C<< elicitation: { form: {} } >> in its C<_meta> C<clientCapabilities>). This
+is the real path: the question goes to the client, the client asks the human.
+=item A server configured with B<C<:&on-elicit>>, which answers questions
+locally. That covers legacy-era clients, the LLM tool bridge
+(C<execute-tool-calls>), and anything driving handlers directly.
+
+With neither, calling the tool comes back as an error result naming which of
+the two is missing — it does not hang, and it does not invent an answer. See
+the "Elicitation" section of C<MCP::Server>'s documentation for the whole
+picture.
+
+=head2 The tool
+
+=head3 ask(message, questions?)
+
+=begin table
+Parameter | Type   | Required | Meaning
+========= | ====== | ======== | =======
+message   | string | yes      | The framing: why the model is asking. Shown above the form.
+questions | array  | no       | The fields to ask for. Omit it (or send an empty list) to ask one free-form question.
+=end table
+
+Each entry of C<questions> is an object:
+
+=begin table
+Key      | Type    | Default  | Meaning
+======== | ======= | ======== | =======
+name     | string  | required | The key the answer comes back under. Must be unique within the call.
+prompt   | string  | —        | What to show the user for this field. Becomes the property's C<description>.
+type     | string  | "string" | One of C<string>, C<number>, C<boolean>.
+options  | array   | —        | Strings to choose between; becomes an C<enum>. Only valid on a string question.
+required | boolean | true     | Whether the user must fill this field in.
+=end table
+
+A call with three fields:
+
+=begin code :lang<json>
+{
+  "message": "I need a few details before I can file the ticket.",
+  "questions": [
+    { "name": "component", "prompt": "Which component?", "options": ["api", "ui", "docs"] },
+    { "name": "severity",  "prompt": "How bad is it?",   "type": "number" },
+    { "name": "notes",     "prompt": "Anything else?",   "required": false }
+  ]
+}
+=end code
+
+...becomes this C<requestedSchema> on the wire:
+
+=begin code :lang<json>
+{
+  "type": "object",
+  "properties": {
+    "component": { "type": "string", "description": "Which component?",
+                   "enum": ["api", "ui", "docs"] },
+    "severity":  { "type": "number", "description": "How bad is it?" },
+    "notes":     { "type": "string", "description": "Anything else?" }
+  },
+  "required": ["component", "severity"]
+}
+=end code
+
+...and comes back to the model as text:
+
+=begin code
+{"component":"api","notes":"","severity":2}
+=end code
+
+Keys are sorted and the JSON is not pretty-printed: this text goes into a
+model's context, where stability is worth more than insertion order and
+newlines are worth nothing at all.
+
+With no C<questions>, the form has a single required string field called
+C<answer>, which is what a model reaching for "just ask them" wants nine times
+out of ten:
+
+=begin code
+{"answer":"go ahead, but stage it first"}
+=end code
+
+=head2 Refusal is an answer
+
+A user who declines or cancels gets a plain, non-error result:
+
+=item C<The user declined to answer.>
+=item C<The user cancelled the request.>
+
+Neither carries C<isError>, and that is deliberate. C<isError> tells a model
+that something went wrong and that trying again might work — so an error result
+here would send it straight back to ask the same person the same question. A
+person saying no is the system working. The tool's description tells the model
+as much: carry on without the answer, or stop and explain why it cannot.
+
+The same goes for a client that answers with something that is not an
+C<ElicitResult> at all: that is read as a decline rather than as a fault.
+
+=head2 Errors
+
+These I<are> error results, because each is a call the model can fix and
+retry:
+
+=item A missing, non-string or empty C<message>.
+=item C<questions> that is not a list, or an entry that is not an object.
+=item A question with no C<name>, or two questions sharing one — answers come
+back keyed by name, so a duplicate would silently lose one.
+=item An unsupported C<type>, C<options> on a non-string question, an empty
+C<options> list, or a C<required> flag that is not a boolean.
+=item An unknown key in a question object, listing the valid ones.
+
+And, as above, calling the tool at all when there is nobody to ask.
+
+=head2 Security and etiquette
+
+=item B<This tool interrupts a human.> It is not free the way reading a file
+is. A model that asks about everything is worse than one that asks about
+nothing, and the tool description is written to push it toward asking only
+when it genuinely cannot proceed. If you find a model over-using it, say so in
+the server's C<instructions>.
+=item B<An answer is user input, not truth.> It arrives as JSON straight from
+whatever the client's form produced. Validate it before acting on it, exactly
+as you would any other input, and do not treat "the user typed it" as
+authorisation for something the user did not understand they were authorising.
+=item B<A parked call holds server state.> Each unanswered question occupies a
+place in the server's elicitation table (64 by default) until it is answered or
+the TTL expires. Set C<timeout> if you would rather give up sooner than the
+server-wide TTL.
+=item B<Asking is inherently consented.> A permission layer in front of the
+server — Claude Code's rules,
+L<MCP::Client::Policy|https://github.com/m-doughty/MCP-Client> — should
+normally allow C<user_ask> outright: prompting the user for permission to
+prompt the user helps nobody.
+
+=head2 Testing
+
+=begin code :lang<shell>
+prove6 -Ilib t/                          # with MCP::Server installed
+prove6 -Ilib -I../MCP-Server/lib t/      # against a sibling checkout
+=end code
+
+C<t/02-tool.rakutest> drives every question shape through a server with a
+scripted C<:on-elicit> behind it; C<t/03-mrtr.rakutest> does the same thing the
+long way round, over a real multi round-trip with no local callback anywhere.
+
+=head2 Examples
+
+=item C<examples/ask-server.raku> — a Streamable HTTP server with a
+terminal-prompt C<:on-elicit> fallback, so both paths can be watched side by
+side: a client that declares the capability gets the form over the wire, and
+one that does not sends the question to the terminal the server was started
+from. (HTTP rather than stdio because a stdio server has already spent stdin
+and stdout on the protocol.)
+
+=head2 Author
+
+Matt Doughty
+
+=head2 License
+
+Artistic-2.0
+
+=end pod

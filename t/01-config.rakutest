@@ -1,0 +1,85 @@
+use Test;
+use lib 'lib';
+use lib 't/lib';
+use AskTest;
+use MCP::Server;
+use MCP::Server::Toolkit;
+use MCP::Server::Tool::Ask;
+
+plan 5;
+
+subtest 'from-config happy path' => {
+	plan 4;
+
+	my $bare = MCP::Server::Tool::Ask.from-config({});
+	nok $bare.timeout.defined, 'timeout is unset by default: the server TTL bounds the wait';
+	is $bare.default-prefix, 'user', 'default-prefix is user, so the tool reads as user_ask';
+	ok $bare ~~ MCP::Server::Toolkit, 'The pack does the Toolkit role';
+
+	my $timed = MCP::Server::Tool::Ask.from-config({ timeout => 90 });
+	is $timed.timeout, 90, 'A configured timeout reaches the attribute';
+};
+
+subtest 'Config key validation' => {
+	plan 3;
+
+	dies-with { MCP::Server::Tool::Ask.from-config({ timeoot => 5 }) },
+		'Valid keys: timeout', 'Unknown key dies listing the valid ones';
+
+	dies-with { MCP::Server::Tool::Ask.from-config({ prefix => 'user' }) },
+		"Config key 'prefix' is reserved", 'Reserved prefix key dies';
+
+	dies-with { MCP::Server::Tool::Ask.new(timeout => 0) },
+		'Ask timeout must be greater than zero', 'A timeout of zero dies';
+};
+
+subtest 'Registration' => {
+	plan 3;
+
+	my $server = MCP::Server.new(:name<ask>);
+	$server.plug: MCP::Server::Tool::Ask.new;
+	is-deeply tool-names($server), ('user_ask',), 'One tool, under the default prefix';
+
+	my $prefixed = MCP::Server.new(:name<ask>);
+	$prefixed.plug: MCP::Server::Tool::Ask.new, prefix => 'human';
+	is-deeply tool-names($prefixed), ('human_ask',), 'An explicit prefix wins over the default';
+
+	my $bare = MCP::Server.new(:name<ask>);
+	$bare.plug: MCP::Server::Tool::Ask.new, prefix => '';
+	is-deeply tool-names($bare), ('ask',), 'And an empty prefix registers it bare';
+};
+
+subtest 'The advertised schema' => {
+	plan 6;
+
+	my $server = MCP::Server.new(:name<ask>);
+	$server.plug: MCP::Server::Tool::Ask.new;
+	my %schema = tool-schema($server, 'user_ask');
+
+	is %schema<type>, 'object', 'The input schema is an object';
+	is-deeply %schema<properties>.keys.sort.List, <message questions>.List,
+		'Taking a message and an optional list of questions';
+	is %schema<properties><message><type>, 'string', 'message is a string';
+	is %schema<properties><questions><type>, 'array', 'questions is an array';
+	is-deeply %schema<required>.List, ('message',),
+		'Only the message is required: asking one free-form question is the common case';
+	ok %schema<properties><questions><description>.contains('name'),
+		'The description tells the model what a question object looks like';
+};
+
+subtest 'The description is written for a model that has to choose' => {
+	plan 3;
+
+	my $server = MCP::Server.new(:name<ask>);
+	$server.plug: MCP::Server::Tool::Ask.new;
+	my $description = $server.handle-request({
+		jsonrpc => '2.0', id => 1, method => 'tools/list',
+	})<result><tools>[0]<description>;
+
+	ok $description.contains('Ask the user'), 'It says what the tool does';
+	ok $description.contains('free-form'), 'It explains the no-questions case';
+	ok $description.contains('not an error'),
+		'And warns the model not to treat a refusal as a failure to retry';
+};
+
+done-testing;

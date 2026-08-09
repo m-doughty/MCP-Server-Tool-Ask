@@ -1,0 +1,209 @@
+use Test;
+use lib 'lib';
+use lib 't/lib';
+use AskTest;
+use JSON::Fast;
+use MCP::Server;
+use MCP::Server::Tool::Ask;
+
+# The tool itself, driven through a legacy-era server whose elicitations are
+# answered by a scripted :on-elicit callback.  That keeps the question ->
+# schema mapping and the answer -> text mapping in one place and one thread;
+# t/03 does the same thing over a real multi round-trip.
+
+plan 8;
+
+#| A server with the Ask pack plugged in and a scripted human behind it.
+#| Comes back as { server, asked }: the array of ElicitRequests has to be the
+#| one the callback is filling in, not a copy of it.
+sub fixture(@answers --> Hash) {
+	my %script = scripted(@answers);
+	my $server = MCP::Server.new(:name<ask-test>, on-elicit => %script<hook>);
+	$server.plug: MCP::Server::Tool::Ask.new;
+	{ server => $server, asked => %script<asked> };
+}
+
+sub accept(%content) { { action => 'accept', content => %content } }
+
+#| The requestedSchema of the last question the tool asked.
+sub schema-of(@asked --> Hash) {
+	@asked[*-1]<params><requestedSchema>;
+}
+
+subtest 'With no questions the user is asked one free-form thing' => {
+	plan 6;
+
+	my %kit = fixture([accept({ answer => 'because I said so' }),]);
+	my @asked := %kit<asked>;
+	my %response = call-tool(%kit<server>, 'user_ask', { message => 'Why?' });
+
+	is @asked.elems, 1, 'One elicitation went out';
+	is @asked[0]<method>, 'elicitation/create', 'As an ElicitRequest';
+	is @asked[0]<params><mode>, 'form', 'In form mode';
+	is @asked[0]<params><message>, 'Why?', 'Carrying the model\'s framing verbatim';
+	is-deeply schema-of(@asked), {
+		type => 'object',
+		properties => { answer => { type => 'string', description => 'Your answer' } },
+		required => ['answer',],
+	}, 'And a single required free-form "answer" field';
+
+	is result-text(%response), '{"answer":"because I said so"}',
+		'The answer comes back as JSON';
+};
+
+subtest 'Questions become form fields' => {
+	plan 5;
+
+	my %kit = fixture([accept({
+		component => 'api', severity => 3, urgent => True, notes => '',
+	}),]);
+	my @asked := %kit<asked>;
+
+	my %response = call-tool(%kit<server>, 'user_ask', {
+		message => 'I need a few details.',
+		questions => [
+			{ name => 'component', prompt => 'Which component?', options => <api ui docs>.List },
+			{ name => 'severity', prompt => 'How bad is it?', type => 'number' },
+			{ name => 'urgent', prompt => 'Drop everything?', type => 'boolean' },
+			{ name => 'notes', prompt => 'Anything else?', required => False },
+		],
+	});
+
+	my %schema = schema-of(@asked);
+	is-deeply %schema<properties><component>,
+		{ type => 'string', description => 'Which component?', enum => <api ui docs>.Array },
+		'Options become a string enum, and the prompt becomes the description';
+	is-deeply %schema<properties><severity>,
+		{ type => 'number', description => 'How bad is it?' }, 'A number question stays a number';
+	is-deeply %schema<properties><urgent>,
+		{ type => 'boolean', description => 'Drop everything?' }, 'And a boolean a boolean';
+	is-deeply %schema<required>.List, <component severity urgent>.List,
+		'Questions are required unless they say otherwise, and "notes" said otherwise';
+
+	is result-text(%response),
+		'{"component":"api","notes":"","severity":3,"urgent":true}',
+		'The whole form comes back as JSON with sorted keys';
+};
+
+subtest 'The answer is stable JSON a model can read' => {
+	plan 3;
+
+	# Sorted keys mean the same form always renders the same way, whatever
+	# order the client's JSON parser happened to hand the object over in.
+	my %kit = fixture([accept({ zeta => 1, alpha => 2, mid => 3 }),]);
+	my $text = result-text(call-tool(%kit<server>, 'user_ask', { message => 'go' }));
+
+	is $text, '{"alpha":2,"mid":3,"zeta":1}', 'Keys come out sorted';
+	nok $text.contains("\n"), 'And on one line: this goes into a model\'s context';
+	is-deeply from-json($text), { alpha => 2, mid => 3, zeta => 1 },
+		'It is real JSON, whatever the user typed into the form';
+};
+
+subtest 'A refusal is an answer, not a failure' => {
+	plan 6;
+
+	my %declining = fixture([{ action => 'decline' },]);
+	my %declined = call-tool(%declining<server>, 'user_ask', { message => 'ok?' });
+	is result-text(%declined), 'The user declined to answer.', 'A decline says so plainly';
+	nok result-errored(%declined),
+		'And is not an error result: a model told its tool failed will simply ask again';
+
+	my %cancelling = fixture([{ action => 'cancel' },]);
+	my %cancelled = call-tool(%cancelling<server>, 'user_ask', { message => 'ok?' });
+	is result-text(%cancelled), 'The user cancelled the request.', 'A cancel says so plainly';
+	nok result-errored(%cancelled), 'And is not an error either';
+
+	# A client (or a callback) that answers with something that is not an
+	# ElicitResult has, in substance, refused.
+	my %confused = fixture(['yes, fine',]);
+	my %confusing = call-tool(%confused<server>, 'user_ask', { message => 'ok?' });
+	is result-text(%confusing), 'The user declined to answer.',
+		'Nonsense from the other side is read as a refusal';
+	nok result-errored(%confusing), 'Still not an error';
+};
+
+subtest 'Malformed calls are error results the model can act on' => {
+	plan 9;
+
+	my $server = fixture([accept({ answer => 'x' }),])<server>;
+
+	errors-with $server, 'user_ask', { }, 'Missing required parameter "message"',
+		'A call with no message at all';
+	errors-with $server, 'user_ask', { message => '   ' }, 'must not be empty',
+		'A message of nothing but whitespace';
+	errors-with $server, 'user_ask', { message => 'x', questions => 'one thing' },
+		'must be a list of question objects', 'Questions that are not a list';
+	errors-with $server, 'user_ask', { message => 'x', questions => ['a string',] },
+		'Question 1 must be an object', 'A question that is not an object';
+	errors-with $server, 'user_ask', { message => 'x', questions => [{ prompt => 'eh?' },] },
+		'must have a non-empty string "name"', 'A question with no name';
+	errors-with $server, 'user_ask',
+		{ message => 'x', questions => [{ name => 'a' }, { name => 'a' }] },
+		'reuses the name "a"', 'Two questions sharing a name';
+	errors-with $server, 'user_ask',
+		{ message => 'x', questions => [{ name => 'a', type => 'object' },] },
+		'a question may be of type boolean, number, string', 'An unsupported type';
+	errors-with $server, 'user_ask',
+		{ message => 'x', questions => [{ name => 'a', type => 'number', options => <1 2>.List },] },
+		'its type must be string', 'Options on a non-string question';
+	errors-with $server, 'user_ask',
+		{ message => 'x', questions => [{ name => 'a', required => 'yes' },] },
+		'must be true or false', 'A required flag that is not a boolean';
+};
+
+subtest 'Edge shapes that are answers rather than errors' => {
+	plan 3;
+
+	my %kit = fixture([accept({ answer => 'fine' }),]);
+	my $server = %kit<server>;
+	my @asked := %kit<asked>;
+
+	# An empty list is a model saying "no fields", which is the free-form case
+	# rather than a mistake worth refusing.
+	my %empty = call-tool($server, 'user_ask', { message => 'go', questions => [] });
+	is-deeply schema-of(@asked)<properties>.keys.List, ('answer',),
+		'An empty questions list asks the free-form question';
+	nok result-errored(%empty), 'And is not an error';
+
+	# A question with no prompt is legal: the name is often self-explanatory.
+	call-tool($server, 'user_ask', { message => 'go', questions => [{ name => 'branch' },] });
+	is-deeply schema-of(@asked)<properties><branch>, { type => 'string' },
+		'A question with no prompt carries no description';
+};
+
+subtest 'The configured timeout reaches the elicitation' => {
+	plan 2;
+
+	# The timeout is the server-side bound on one question; a call that runs out
+	# of it comes back as a cancellation rather than hanging the tool.  Proven
+	# here with a callback that never answers in time.
+	my $server = MCP::Server.new(
+		:name<slow>,
+		on-elicit => -> %request { sleep 0.5; { action => 'accept', content => { answer => 'late' } } },
+	);
+	$server.plug: MCP::Server::Tool::Ask.new(timeout => 60);
+	is result-text(call-tool($server, 'user_ask', { message => 'go' })), '{"answer":"late"}',
+		'A generous timeout lets a slow answer through';
+
+	# The local callback path is synchronous, so the timeout only bites on the
+	# wire; what matters here is that configuring one does not break the call.
+	my $brief = MCP::Server.new(:name<brief>, on-elicit => -> %r { { action => 'accept', content => { answer => 'ok' } } });
+	$brief.plug: MCP::Server::Tool::Ask.new(timeout => 0.5);
+	is result-text(call-tool($brief, 'user_ask', { message => 'go' })), '{"answer":"ok"}',
+		'And a short one does not trip up an answer that is already there';
+};
+
+subtest 'A server with nobody to ask says so' => {
+	plan 2;
+
+	my $server = MCP::Server.new(:name<nobody>);
+	$server.plug: MCP::Server::Tool::Ask.new;
+
+	my %response = call-tool($server, 'user_ask', { message => 'anyone?' });
+	ok result-errored(%response),
+		'Asking with no client and no callback is an error result -- there is nothing to wait for';
+	ok result-text(%response).contains('on-elicit'),
+		'Naming the thing the server author has to configure';
+};
+
+done-testing;

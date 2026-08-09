@@ -1,0 +1,67 @@
+use Test;
+use lib 'lib';
+use lib 't/lib';
+use AskTest;
+# NB: this file must never `use MCP::Server::Tool::Ask` -- the whole point is
+# the path a real deployment takes, where the pack is named in configuration
+# and loaded at runtime by MCP::Server's require-based loader.
+use MCP::Server;
+use MCP::Server::Toolkit;
+
+plan 4;
+
+subtest 'Bare name in :tools resolves under MCP::Server::Tool::' => {
+	plan 3;
+
+	my %script = scripted([{ action => 'accept', content => { answer => 'loaded' } },]);
+	my $server = MCP::Server.new(
+		:name<t>, on-elicit => %script<hook>,
+		:tools['Ask',],
+	);
+
+	is-deeply tool-names($server), ('user_ask',),
+		'Toolkit loaded by name and registered under its own default prefix';
+
+	my %response = call-tool($server, 'user_ask', { message => 'are you there?' });
+	nok result-errored(%response), 'The dynamically loaded tool works';
+	is result-text(%response), '{"answer":"loaded"}', 'And answers with the form it was given';
+};
+
+subtest 'Config keys travel through :tools' => {
+	plan 2;
+
+	my $server = MCP::Server.new(
+		:name<t>,
+		:tools['Ask' => { timeout => 45, prefix => 'human' }],
+	);
+	is-deeply tool-names($server), ('human_ask',),
+		'The reserved prefix key namespaces the pack';
+
+	# The timeout is private to the instance the loader built, so the proof that
+	# it arrived is that a bad one is refused at load time.
+	dies-with { MCP::Server.new(:name<t>, :tools['Ask' => { timeout => -1 }]) },
+		'Ask timeout must be greater than zero', 'A bad timeout dies where it is configured';
+};
+
+subtest 'The pack satisfies the toolkit contract when required bare' => {
+	plan 3;
+
+	# Bound rather than looked up via ::('...') afterwards: with MCP::Server
+	# already `use`d, a later ::('...') lookup can miss the freshly loaded slot.
+	my \type = (require ::('MCP::Server::Tool::Ask'));
+	ok type ~~ MCP::Server::Toolkit, 'Required type does the Toolkit role';
+	ok type.^can('register'), 'And can register itself';
+	is type.new.default-prefix, 'user', 'Its default prefix is user';
+};
+
+subtest 'Configuration mistakes fail loudly through :tools' => {
+	plan 2;
+
+	dies-with { MCP::Server.new(:name<t>, :tools['Ask' => { timeut => 5 }]) },
+		'Unknown config key(s)', 'A typo in a config key dies';
+
+	dies-with { MCP::Server.new(:name<t>, :tools['Asking',]) },
+		"Could not load toolkit 'Asking'", 'A toolkit that does not exist says which one';
+};
+
+done-testing;

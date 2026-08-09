@@ -1,0 +1,31 @@
+{
+  "auth": "zef:apogee",
+  "authors": [
+    "Matt Doughty"
+  ],
+  "build-depends": [
+  ],
+  "depends": [
+    "MCP::Server:ver<0.4.0+>:auth<zef:apogee>",
+    "JSON::Fast:ver<0.19>:auth<cpan:TIMOTIMO>"
+  ],
+  "description": "Ask-the-user tool for MCP::Server, built on server-side elicitation",
+  "license": "Artistic-2.0",
+  "name": "MCP::Server::Tool::Ask",
+  "perl": "6.d",
+  "provides": {
+    "MCP::Server::Tool::Ask": "lib/MCP/Server/Tool/Ask.rakumod"
+  },
+  "resources": [
+  ],
+  "source-url": "https://github.com/m-doughty/MCP-Server-Tool-Ask.git",
+  "tags": [
+    "mcp",
+    "tools",
+    "elicitation",
+    "llm"
+  ],
+  "test-depends": [
+  ],
+  "version": "0.1.0"
+}

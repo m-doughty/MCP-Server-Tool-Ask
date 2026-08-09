@@ -1,0 +1,116 @@
+use Test;
+use lib 'lib';
+use lib 't/lib';
+use AskTest;
+use MCP::Server;
+use MCP::Server::Protocol;
+use MCP::Server::Tool::Ask;
+
+# The real thing: no :on-elicit callback anywhere, a modern client that
+# declared the elicitation capability, and the tool call answered with a
+# question that the client comes back to.  t/02 pins the mapping; this pins
+# that the mapping actually survives a multi round-trip.
+
+plan 4;
+
+sub fixture(--> MCP::Server:D) {
+	my $server = MCP::Server.new(:name<ask-mrtr>, :version<1.0.0>);
+	$server.plug: MCP::Server::Tool::Ask.new;
+	$server;
+}
+
+sub ask-params(%arguments --> Hash) {
+	{ name => 'user_ask', arguments => %arguments };
+}
+
+subtest 'The tool call is answered with the question' => {
+	plan 6;
+
+	my $server = fixture();
+	my %result = $server.handle-modern-request(modern-msg(1, 'tools/call', ask-params({
+		message => 'Which branch should I release from?',
+		questions => [{ name => 'branch', prompt => 'Branch', options => <main next>.List },],
+	})))<result>;
+
+	is %result<resultType>, 'input_required', 'The call needs the user before it can finish';
+	ok %result<requestState> ~~ Str:D, 'And carries a continuation token';
+	is %result<inputRequests>.elems, 1, 'With one question in it';
+
+	my %request = %result<inputRequests>.values.head;
+	is %request<method>, 'elicitation/create', 'Which is an ElicitRequest';
+	is %request<params><message>, 'Which branch should I release from?',
+		'Carrying the model\'s framing';
+	is-deeply %request<params><requestedSchema>, {
+		type => 'object',
+		properties => {
+			branch => { type => 'string', description => 'Branch', enum => <main next>.Array },
+		},
+		required => ['branch',],
+	}, 'And the form the questions describe';
+};
+
+subtest 'The retry finishes the call with the user\'s answer in it' => {
+	plan 4;
+
+	my $server = fixture();
+	my %arguments = message => 'Which branch?',
+		questions => [{ name => 'branch', prompt => 'Branch' },];
+
+	my %first = $server.handle-modern-request(
+		modern-msg(1, 'tools/call', ask-params(%arguments)),
+	)<result>;
+	is $server.pending-elicitations, 1, 'The call parks while the user reads the form';
+
+	my %retry = ask-params(%arguments);
+	%retry<requestState> = %first<requestState>;
+	%retry<inputResponses> = {
+		%first<inputRequests>.keys.head => {
+			action => 'accept', content => { branch => 'next' },
+		},
+	};
+
+	my %response = $server.handle-modern-request(modern-msg(2, 'tools/call', %retry));
+	is %response<id>, 2, 'The result answers the retry';
+	is %response<result><content>[0]<text>, '{"branch":"next"}',
+		'And carries what the user filled in';
+	is $server.pending-elicitations, 0, 'Nothing is left parked';
+};
+
+subtest 'A user who says no over the wire is still not an error' => {
+	plan 4;
+
+	for <decline cancel> -> $action {
+		my $server = fixture();
+		my %arguments = message => 'Deploy?';
+		my %first = $server.handle-modern-request(
+			modern-msg(1, 'tools/call', ask-params(%arguments)),
+		)<result>;
+
+		my %retry = ask-params(%arguments);
+		%retry<requestState> = %first<requestState>;
+		%retry<inputResponses> = { %first<inputRequests>.keys.head => { :$action } };
+
+		my %result = $server.handle-modern-request(modern-msg(2, 'tools/call', %retry))<result>;
+		is %result<content>[0]<text>,
+			$action eq 'decline'
+				?? 'The user declined to answer.'
+				!! 'The user cancelled the request.',
+			"A $action comes back as plain text";
+		nok %result<isError>, "And a $action is not an error result";
+	}
+};
+
+subtest 'A client that cannot be asked is told so rather than asked anyway' => {
+	plan 3;
+
+	my $server = fixture();
+	my %result = $server.handle-modern-request(
+		modern-msg(1, 'tools/call', ask-params({ message => 'anyone?' }), :!caps),
+	)<result>;
+
+	is %result<resultType>, 'complete', 'The call answers in one round';
+	ok %result<isError>, 'With an error result: there is nobody to wait for';
+	is $server.pending-elicitations, 0, 'And nothing was parked';
+};
+
+done-testing;

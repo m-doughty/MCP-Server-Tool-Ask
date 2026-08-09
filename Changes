@@ -1,0 +1,19 @@
+Revision history for MCP::Server::Tool::Ask
+
+{{$NEXT}}
+
+0.1.0  2026-08-09T19:58:41+01:00
+    - Initial release
+    - MCP::Server::Tool::Ask: a toolkit that lets a model ask the human on the
+      other end of the MCP client a question, built on MCP::Server's
+      server-side elicitation (the 2026-07-28 multi round-trip request
+      pattern). Plugs into any MCP::Server via $server.plug($kit) or
+      MCP::Server.new(:tools['Ask']).
+    - One tool (default prefix "user"): ask. It takes a message and an optional
+      list of questions -- each with a name, a prompt, an optional type
+      (string, number or boolean), optional options that become an enum, and an
+      optional required flag -- and renders them as one elicitation form.
+      With no questions it asks for a single free-form "answer".
+    - An accepted form comes back as JSON with sorted keys. A decline or a
+      cancel comes back as plain text and never as an error: a user refusing to
+      answer is the system working, and a model that sees isError will retry.
