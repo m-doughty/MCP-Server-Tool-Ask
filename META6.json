@@ -6,7 +6,7 @@
   "build-depends": [
   ],
   "depends": [
-    "MCP::Server:ver<0.4.0+>:auth<zef:apogee>",
+    "MCP::Server:ver<0.6.0+>:auth<zef:apogee>",
     "JSON::Fast:ver<0.19>:auth<cpan:TIMOTIMO>"
   ],
   "description": "Ask-the-user tool for MCP::Server, built on server-side elicitation",
@@ -27,5 +27,5 @@
   ],
   "test-depends": [
   ],
-  "version": "0.1.1"
+  "version": "0.1.2"
 }

@@ -2,6 +2,9 @@ Revision history for MCP::Server::Tool::Ask
 
 {{$NEXT}}
 
+0.1.2  2026-08-21T21:44:46+01:00
+    - Pin MCP::Server version.
+
 0.1.1  2026-08-21T21:43:41+01:00
     - Documented why this pack declares NO MCP annotations: "ask" writes
       nothing, so calling it read-only would be defensible -- and a host reads
