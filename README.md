@@ -186,6 +186,8 @@ Security and etiquette
 
   * **Asking is inherently consented.** A permission layer in front of the server — Claude Code's rules, [MCP::Client::Policy](https://github.com/m-doughty/MCP-Client) — should normally allow `user_ask` outright: prompting the user for permission to prompt the user helps nobody.
 
+  * **This pack declares no MCP annotations, deliberately.** `ask` writes nothing, so `readOnlyHint => True ` would be defensible — and a host reads that (with `idempotentHint`) as permission to run two of them at once, which is the last thing a tool that parks the call on a human wants: two questions racing to the front of one person's attention is a worse conversation than two questions in a row. It is not idempotent either. Asking the same question twice asks a person twice. "Safe to describe as read-only" and "safe to run beside its neighbours" are different questions about the same tool, and an annotation answers the second.
+
 Testing
 -------
 

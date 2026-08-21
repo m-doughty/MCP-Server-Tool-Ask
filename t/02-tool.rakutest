@@ -11,7 +11,7 @@ use MCP::Server::Tool::Ask;
 # schema mapping and the answer -> text mapping in one place and one thread;
 # t/03 does the same thing over a real multi round-trip.
 
-plan 8;
+plan 9;
 
 #| A server with the Ask pack plugged in and a scripted human behind it.
 #| Comes back as { server, asked }: the array of ElicitRequests has to be the
@@ -191,6 +191,57 @@ subtest 'The configured timeout reaches the elicitation' => {
 	$brief.plug: MCP::Server::Tool::Ask.new(timeout => 0.5);
 	is result-text(call-tool($brief, 'user_ask', { message => 'go' })), '{"answer":"ok"}',
 		'And a short one does not trip up an answer that is already there';
+};
+
+subtest 'user_ask is deliberately unannotated, so a batch of them is a queue' => {
+	plan 4;
+
+	# The pack's one deliberate silence. "ask" writes nothing, so calling it
+	# read-only would be defensible -- and a host reads that as permission to
+	# run two of them side by side, which is the last thing a tool that parks
+	# the call on a human wants. Two questions racing to the front of one
+	# person's attention is a worse conversation than two questions in a row.
+	my $server = MCP::Server.new(:name<serial-ask>);
+	$server.plug: MCP::Server::Tool::Ask.new;
+
+	is-deeply $server.tool-annotations('user_ask'), %(),
+		'the tool declares no annotations at all';
+
+	my %listed = $server.handle-request({
+		jsonrpc => '2.0', id => 1, method => 'tools/list',
+	});
+	nok %listed<result><tools>[0]<annotations>:exists,
+		'and the catalog carries none for it';
+
+	# And what that buys: two of them in one batch are asked one after the
+	# other, in the order the model wrote them.
+	my $lock = Lock.new;
+	my Int $in-flight = 0;
+	my Int $peak = 0;
+	my @order;
+	my $asking = MCP::Server.new(:name<asking>, on-elicit => -> %request {
+		$lock.protect: {
+			$in-flight++;
+			$peak = $in-flight if $in-flight > $peak;
+			@order.push(%request<params><message>);
+		}
+		sleep 0.2;
+		$lock.protect: { $in-flight-- };
+		{ action => 'accept', content => { answer => 'yes' } };
+	});
+	$asking.plug: MCP::Server::Tool::Ask.new;
+
+	$asking.execute-tool-calls((
+		%( id => 'a', function => %( name => 'user_ask',
+			arguments => %( message => 'first?' ) ) ),
+		%( id => 'b', function => %( name => 'user_ask',
+			arguments => %( message => 'second?' ) ) ),
+	));
+
+	is $lock.protect({ $peak }), 1,
+		'only ever one question in front of the human at a time';
+	is-deeply $lock.protect({ @order.List }), ('first?', 'second?'),
+		'and they arrive in the order the model asked them';
 };
 
 subtest 'A server with nobody to ask says so' => {

@@ -2,6 +2,13 @@ Revision history for MCP::Server::Tool::Ask
 
 {{$NEXT}}
 
+0.1.1  2026-08-21T21:43:41+01:00
+    - Documented why this pack declares NO MCP annotations: "ask" writes
+      nothing, so calling it read-only would be defensible -- and a host reads
+      that as permission to run two of them at once, which is the last thing a
+      tool that parks the call on a human wants. It is not idempotent either:
+      asking the same question twice asks a person twice.
+
 0.1.0  2026-08-09T19:58:41+01:00
     - Initial release
     - MCP::Server::Tool::Ask: a toolkit that lets a model ask the human on the

@@ -81,6 +81,18 @@ submethod TWEAK() {
 method default-prefix(--> Str) { 'user' }
 
 method register($registrar) {
+	# DELIBERATELY UNANNOTATED, and it is the one registration in the packs
+	# where that is a decision rather than an omission.  "ask" writes nothing,
+	# so calling it read-only would be defensible -- and it would be read by a
+	# host as permission to run two of them side by side, which is the last
+	# thing this tool wants: it parks the call on a human, and two questions
+	# racing to the front of one person's attention is a worse conversation
+	# than two questions in a row.  It is not idempotent either.  Asking the
+	# same question twice asks a person twice.
+	#
+	# "Safe to repair as read-only" and "safe to run concurrently" are
+	# different predicates about the same tool, and only the second is what an
+	# annotation grants.  See MCP::Server::Batch.
 	$registrar.tool: 'ask',
 		description => 'Ask the user a question and wait for their answer. Use '
 			~ 'this when you are missing something only the user can tell you: a '
