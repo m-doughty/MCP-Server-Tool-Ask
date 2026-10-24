@@ -1,0 +1,86 @@
+use Test;
+use lib 'lib';
+use MCP::Server::Tool::Ask::Test::Kit;
+use MCP::Server;
+use MCP::Server::Tool::Ask;
+
+# What user_ask publishes about its own arguments, checked against what its
+# handler actually does with them.
+#
+# One tool, two parameters, and the whole contract turns on the difference
+# between them: "message" is the one thing the tool cannot be called without,
+# and "questions" is genuinely optional — omitting it is not a value the
+# handler substitutes but a different shape of question altogether, which is
+# why it has no default to advertise. A schema that said nothing about either
+# would tell a model it could call this tool with no arguments at all.
+
+plan 4;
+
+sub fixture(@answers --> Hash) {
+	my %script = scripted(@answers);
+	my $server = MCP::Server.new(:name<ask-schema>, on-elicit => %script<hook>);
+	$server.plug: MCP::Server::Tool::Ask.new;
+	{ server => $server, asked => %script<asked> };
+}
+
+sub accept(%content) { { action => 'accept', content => %content } }
+
+subtest 'the schema names exactly the required parameters' => {
+	plan 3;
+
+	my %kit = fixture([accept({ answer => 'yes' }),]);
+	is-deeply tool-names(%kit<server>), ('user_ask',), 'one tool in the pack';
+
+	my %schema = tool-schema(%kit<server>, 'user_ask');
+	is-deeply (%schema<required> // ()).sort.List, <message>.List,
+		'message is required';
+	is-deeply %schema<properties>.keys.sort.List, <message questions>.List,
+		'and those are the only two parameters';
+};
+
+subtest 'the schema advertises exactly the declared defaults' => {
+	plan 2;
+
+	my %kit = fixture([accept({ answer => 'yes' }),]);
+	my %props = tool-schema(%kit<server>, 'user_ask')<properties>;
+
+	nok %props<message><default>:exists,
+		'a required parameter has no default to fall back to';
+	# Omitting "questions" does not mean "questions => []": it means a single
+	# free-form question instead of a form, which is a different path through
+	# the handler rather than a value it substitutes.  Nothing to advertise,
+	# so nothing is advertised.
+	nok %props<questions><default>:exists,
+		'and the optional one substitutes no value, so it declares none';
+};
+
+subtest 'a required parameter really is required' => {
+	plan 3;
+
+	my %kit = fixture([accept({ answer => 'yes' }),]);
+
+	# The assertion this file exists for: the handler dies without "message",
+	# so the schema has to say so.  It dies before anything is asked of the
+	# human, which is the whole point -- a model that guessed would otherwise
+	# park a person on an empty question.
+	errors-with %kit<server>, 'user_ask', %(),
+		'Missing required parameter "message"',
+		'user_ask without message is refused, not guessed at';
+	errors-with %kit<server>, 'user_ask', %( questions => [] ),
+		'Missing required parameter "message"',
+		'and questions alone is not enough to make a call';
+	is %kit<asked>.elems, 0, 'neither refusal reached the human';
+};
+
+subtest 'the optional parameter really is optional' => {
+	plan 3;
+
+	my %kit = fixture([accept({ answer => 'because I said so' }),]);
+	my %response = call-tool(%kit<server>, 'user_ask', %( message => 'Why?' ));
+
+	nok result-errored(%response), 'a call with message alone succeeds';
+	is result-text(%response), '{"answer":"because I said so"}',
+		'and comes back with the free-form answer';
+	is-deeply %kit<asked>[0]<params><requestedSchema><required>, ['answer',],
+		'the question the user got is the free-form one';
+};

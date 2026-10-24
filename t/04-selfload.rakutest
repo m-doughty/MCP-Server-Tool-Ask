@@ -1,7 +1,6 @@
 use Test;
 use lib 'lib';
-use lib 't/lib';
-use AskTest;
+use MCP::Server::Tool::Ask::Test::Kit;
 # NB: this file must never `use MCP::Server::Tool::Ask` -- the whole point is
 # the path a real deployment takes, where the pack is named in configuration
 # and loaded at runtime by MCP::Server's require-based loader.

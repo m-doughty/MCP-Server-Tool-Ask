@@ -96,6 +96,8 @@ The tool
 </tbody>
 </table>
 
+The `Required` column is the published JSON Schema's `required` array, so a model knows before it calls that there is no asking a person nothing. Neither parameter publishes a JSON Schema `default`: omitting `questions` is not a value being substituted but a different question altogether — one free-form field instead of a form — and there is no default value that says that.
+
 Each entry of `questions` is an object:
 
 <table class="pod-table">

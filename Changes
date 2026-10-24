@@ -2,6 +2,31 @@ Revision history for MCP::Server::Tool::Ask
 
 {{$NEXT}}
 
+0.1.3  2026-10-24T18:50:11+01:00
+    - [2026-09-28] Requires JSON::Fast 0.21.0 or later (zef:timo). 0.19
+      (cpan:TIMOTIMO) fails its own tests under the RakuAST compiler
+      frontend that Rakudo 2026.09 makes the default, so installing this
+      distribution stopped at that dependency.
+    - [2026-09-19] audited what user_ask publishes about its own arguments
+      against what its handler does with them, and added
+      t/05-schema-contract.rakutest to keep the two together: "message" is in
+      the schema's required array and calling without it is refused before
+      anybody is asked anything, and neither parameter publishes a JSON Schema
+      default, because omitting "questions" is not a value being substituted
+      but a different question altogether -- one free-form field instead of a
+      form. No library code changed.
+    - MAINT: [2026-08-27] moved the shared test fixtures from
+      C<t/lib/AskTest.rakumod> into
+      C<lib/MCP/Server/Tool/Ask/Test/Kit.rakumod>
+      (C<MCP::Server::Tool::Ask::Test::Kit>). A C<t/lib> directory is
+      its own CompUnit repo that starts cold on a fresh C<zef
+      install>, and parallel test files pulling the fixture's
+      dependency chain into that cold store can race and fail the
+      install outright. C<lib/> is staged and precompiled before the
+      test phase runs, so shipping test support inside the dist's own
+      namespace dissolves the race. This is the fleet-wide convention
+      going forward.
+
 0.1.2  2026-08-21T21:44:46+01:00
     - Pin MCP::Server version.
 

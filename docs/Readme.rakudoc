@@ -105,6 +105,13 @@ message   | string | yes      | The framing: why the model is asking. Shown abov
 questions | array  | no       | The fields to ask for. Omit it (or send an empty list) to ask one free-form question.
 =end table
 
+The C<Required> column is the published JSON Schema's C<required> array, so a
+model knows before it calls that there is no asking a person nothing.
+Neither parameter publishes a JSON Schema C<default>: omitting C<questions>
+is not a value being substituted but a different question altogether — one
+free-form field instead of a form — and there is no default value that says
+that.
+
 Each entry of C<questions> is an object:
 
 =begin table

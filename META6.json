@@ -7,14 +7,15 @@
   ],
   "depends": [
     "MCP::Server:ver<0.6.0+>:auth<zef:apogee>",
-    "JSON::Fast:ver<0.19>:auth<cpan:TIMOTIMO>"
+    "JSON::Fast:ver<0.21.0+>:auth<zef:timo>"
   ],
   "description": "Ask-the-user tool for MCP::Server, built on server-side elicitation",
   "license": "Artistic-2.0",
   "name": "MCP::Server::Tool::Ask",
   "perl": "6.d",
   "provides": {
-    "MCP::Server::Tool::Ask": "lib/MCP/Server/Tool/Ask.rakumod"
+    "MCP::Server::Tool::Ask": "lib/MCP/Server/Tool/Ask.rakumod",
+    "MCP::Server::Tool::Ask::Test::Kit": "lib/MCP/Server/Tool/Ask/Test/Kit.rakumod"
   },
   "resources": [
   ],
@@ -27,5 +28,5 @@
   ],
   "test-depends": [
   ],
-  "version": "0.1.2"
+  "version": "0.1.3"
 }

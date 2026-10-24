@@ -1,7 +1,6 @@
 use Test;
 use lib 'lib';
-use lib 't/lib';
-use AskTest;
+use MCP::Server::Tool::Ask::Test::Kit;
 use MCP::Server;
 use MCP::Server::Protocol;
 use MCP::Server::Tool::Ask;
